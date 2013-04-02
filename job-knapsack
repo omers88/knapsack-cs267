@@ -1,0 +1,8 @@
+#PBS -l walltime=00:10:00
+#PBS -l mppwidth=4
+#PBS -l mppnppn=1
+#PBS -j oe
+#PBS -V
+
+cd $PBS_O_WORKDIR
+aprun -n 4 -N 1 ./knapsack

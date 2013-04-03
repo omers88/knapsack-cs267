@@ -68,28 +68,16 @@ int build_table( int nitems, int cap, shared int *T, shared int *w, shared int *
             }
         }
         // Do rest of block with private pointer
-        // if (MYTHREAD == 2) printf("block_height: %d\n",block_height);
-        // if (MYTHREAD == 2) printf("block_width: %d\n",block_width);
         for (int row = 1; row < block_height; row++) {
             w_item = w[block_height * MYTHREAD + row];
             v_item = v[block_height * MYTHREAD + row];
             row_start = row * (cap + 1);
             prev_row_start = row_start - (cap+1);
-            // if (MYTHREAD == 2 && row == 1317) printf("v_item = %d, w_item = %d\n", v_item, w_item);
             for (int col = col_index; col < col_index + block_width; col++) {
-                if (MYTHREAD == 2 && row == 1317 && col > 200) printf("col: %d\n",col);
-                if (MYTHREAD == 2 && row == 1317 && col ==208) printf("poop1\n");
                 if (col < w_item) {
-                    if (MYTHREAD == 2 && row == 1317 && col ==208) printf("poop2\n");
-                    if (MYTHREAD == 2 && row == 1317 && col ==208) {
-                        printf("prevprev: %d\n", upc_threadof(T + row_start + col + T_start - 2));
-                        printf("prev: %d\n", upc_threadof(T + row_start + col + T_start - 1));
-                        printf("current: %d\n", upc_threadof(T + row_start + col + T_start));
-                    }
                     T_local[row_start + col] = T_local[prev_row_start + col];
                     // T[row_start + col + T_start] = T[prev_row_start + col + T_start];
                 } else {
-                    // if (MYTHREAD == 2 && row == 1317 && col > 200) printf("poop\n");
                     T_local[row_start + col] = max( T_local[prev_row_start + col], T_local[prev_row_start + col - w_item] + v_item );
                     // T[row_start + col + T_start] = max( T[prev_row_start + col + T_start], T[prev_row_start + col - w_item + T_start] + v_item );
                 }

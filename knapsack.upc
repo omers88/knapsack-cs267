@@ -5,7 +5,7 @@
 #include <upc.h>
 #include <upc_collective.h>
 
-#define CAPACITY 1536 - 1
+#define CAPACITY (1536 - 1)
 #define NITEMS 6144
 // #define PROCESSOR_BLOCK_SIZE CAPACITY * NITEMS / THREADS
 #define PROCESSOR_BLOCK_SIZE 2359296
@@ -30,9 +30,7 @@ double read_timer( ) {
 //
 //  solvers
 //
-int build_table( int nitems, int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *v, int block_width, int block_height, upc_lock_t** locks ) {
-
-    //TODO: check blocking, lock array
+int build_table(int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *v, int block_width, int block_height, upc_lock_t** locks ) {
     int w_item, v_item, col_index, row_start, prev_row_start, lock_index;
     int T_start = (cap+1) * (block_height * MYTHREAD);
     int* T_local = (int *) (T + T_start);
@@ -87,16 +85,16 @@ int build_table( int nitems, int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, shar
     }
 
     upc_barrier; // TODO try removing
-    return T[(cap+1) * nitems - 1];
+    return T[(cap+1) * NITEMS - 1];
 }
 
-void backtrack( int nitems, int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *u ) {
+void backtrack( int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *u ) {
     int i, j;
 
     if( MYTHREAD != 0 ) return;
 
-    i = nitems*(cap+1) - 1;
-    for( j = nitems-1; j > 0; j-- ) {
+    i = NITEMS*(cap+1) - 1;
+    for( j = NITEMS-1; j > 0; j-- ) {
         u[j] = T[i] != T[i-cap-1];
         i -= cap+1 + (u[j] ? w[j] : 0 );
     }
@@ -106,11 +104,11 @@ void backtrack( int nitems, int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, share
 //
 //  serial solver to check correctness
 //
-int solve_serial( int nitems, int cap, shared int *w, shared int *v ) {
+int solve_serial( int cap, shared int *w, shared int *v ) {
     int i, j, best, *allocated, *T, wj, vj;
 
     // alloc local resources
-    T = allocated = malloc( nitems*(cap+1)*sizeof(int) );
+    T = allocated = malloc( NITEMS*(cap+1)*sizeof(int) );
     if( !allocated ) {
         fprintf( stderr, "Failed to allocate memory" );
         upc_global_exit( -1 );
@@ -121,7 +119,7 @@ int solve_serial( int nitems, int cap, shared int *w, shared int *v ) {
     vj = v[0];
     for( i = 0;  i <  wj;  i++ ) T[i] = 0;
     for( i = wj; i <= cap; i++ ) T[i] = vj;
-    for( j = 1; j < nitems; j++ ) {
+    for( j = 1; j < NITEMS; j++ ) {
         wj = w[j];
         vj = v[j];
         for( i = 0;  i <  wj;  i++ ) T[i+cap+1] = T[i];
@@ -180,20 +178,19 @@ int main( int argc, char** argv ) {
 
     // these set the problem size
     int capacity   = CAPACITY;
-    int nitems     = NITEMS;
 
     int block_width = (capacity + 1) / THREADS;
-    int block_height = nitems / THREADS;
+    int block_height = NITEMS / THREADS;
 
     srand48( (unsigned int)time(NULL) + MYTHREAD );
 
     // allocate distributed arrays, use cyclic distribution
-    weight = (shared int *) upc_all_alloc( nitems, sizeof(int) );
-    value  = (shared int *) upc_all_alloc( nitems, sizeof(int) );
-    used   = (shared int *) upc_all_alloc( nitems, sizeof(int) );
+    weight = (shared int *) upc_all_alloc( NITEMS, sizeof(int) );
+    value  = (shared int *) upc_all_alloc( NITEMS, sizeof(int) );
+    used   = (shared int *) upc_all_alloc( NITEMS, sizeof(int) );
     total  = (shared [PROCESSOR_BLOCK_SIZE] int *) upc_all_alloc( THREADS, PROCESSOR_BLOCK_SIZE * sizeof(int) );
-    // total  = (shared int *) upc_all_alloc( nitems * (capacity+1) / block_width, sizeof(int) * block_width );
-    // total  = (shared int *) upc_all_alloc( nitems * (capacity+1), sizeof(int) );
+    // total  = (shared int *) upc_all_alloc( NITEMS * (capacity+1) / block_width, sizeof(int) * block_width );
+    // total  = (shared int *) upc_all_alloc( NITEMS * (capacity+1), sizeof(int) );
 
     if( !weight || !value || !total || !used ) {
         fprintf( stderr, "Failed to allocate memory" );
@@ -202,7 +199,7 @@ int main( int argc, char** argv ) {
 
     // init
     max_weight = min( max_weight, capacity ); // don't generate items that don't fit into bag
-    upc_forall( i = 0; i < nitems; i++; i ) {
+    upc_forall( i = 0; i < NITEMS; i++; i ) {
         weight[i] = 1 + (lrand48()%max_weight);
         value[i]  = 1 + (lrand48()%max_value);
     }
@@ -210,7 +207,7 @@ int main( int argc, char** argv ) {
     upc_barrier;
 
     int num_locks = THREADS * THREADS;
-    // locks = (shared upc_lock_t **) upc_all_alloc( nitems, THREADS * sizeof(upc_lock_t*) );
+    // locks = (shared upc_lock_t **) upc_all_alloc( NITEMS, THREADS * sizeof(upc_lock_t*) );
     locks = allocate_lock_array(num_locks);
     upc_forall( int row = 1; row < THREADS; row++; row-1 ) {
         for ( int col = 0; col < THREADS; col++ ) {
@@ -222,19 +219,19 @@ int main( int argc, char** argv ) {
     // time the solution
     seconds = read_timer( );
 
-    best_value = build_table( nitems, capacity, total, weight, value, block_width, block_height, locks );
-    backtrack( nitems, capacity, total, weight, used );
+    best_value = build_table( capacity, total, weight, value, block_width, block_height, locks );
+    backtrack( capacity, total, weight, used );
 
     seconds = read_timer( ) - seconds;
 
     // check the result
     if( MYTHREAD == 0 ) {
-        printf( "%d items, capacity: %d, time: %g\n", nitems, capacity, seconds );
+        printf( "%d items, capacity: %d, time: %g\n", NITEMS, capacity, seconds );
 
-        best_value_serial = solve_serial( nitems, capacity, weight, value );
+        best_value_serial = solve_serial( capacity, weight, value );
 
         total_weight = nused = total_value = 0;
-        for( i = 0; i < nitems; i++ ) {
+        for( i = 0; i < NITEMS; i++ ) {
             if( used[i] ) {
                 nused++;
                 total_weight += weight[i];

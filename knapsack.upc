@@ -30,16 +30,16 @@ double read_timer( ) {
 //
 //  solvers
 //
-int build_table(int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *v, int block_width, int block_height, upc_lock_t** locks ) {
+int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *v, int block_width, int block_height, upc_lock_t** locks ) {
     int w_item, v_item, col_index, row_start, prev_row_start, lock_index;
-    int T_start = (cap+1) * (block_height * MYTHREAD);
+    int T_start = (CAPACITY+1) * (block_height * MYTHREAD);
     int* T_local = (int *) (T + T_start);
-    int T_start_prev = T_start - (cap+1);
+    int T_start_prev = T_start - (CAPACITY+1);
 
     // Calculate top row
     if (MYTHREAD == 0) {
         for (int i = 0; i < w[0]; i++) T[i] = 0;
-        for (int i = w[0]; i <= cap; i++) T[i] = v[0];
+        for (int i = w[0]; i <= CAPACITY; i++) T[i] = v[0];
     }
 
     for (int block = 0; block < THREADS; block++) {
@@ -66,8 +66,8 @@ int build_table(int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, sh
         for (int row = 1; row < block_height; row++) {
             w_item = w[block_height * MYTHREAD + row];
             v_item = v[block_height * MYTHREAD + row];
-            row_start = row * (cap + 1);
-            prev_row_start = row_start - (cap+1);
+            row_start = row * (CAPACITY + 1);
+            prev_row_start = row_start - (CAPACITY+1);
             for (int col = col_index; col < col_index + block_width; col++) {
                 if (col < w_item) {
                     T_local[row_start + col] = T_local[prev_row_start + col];
@@ -85,18 +85,18 @@ int build_table(int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, sh
     }
 
     upc_barrier; // TODO try removing
-    return T[(cap+1) * NITEMS - 1];
+    return T[(CAPACITY+1) * NITEMS - 1];
 }
 
-void backtrack( int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *u ) {
+void backtrack( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *u ) {
     int i, j;
 
     if( MYTHREAD != 0 ) return;
 
-    i = NITEMS*(cap+1) - 1;
+    i = NITEMS*(CAPACITY+1) - 1;
     for( j = NITEMS-1; j > 0; j-- ) {
-        u[j] = T[i] != T[i-cap-1];
-        i -= cap+1 + (u[j] ? w[j] : 0 );
+        u[j] = T[i] != T[i-CAPACITY-1];
+        i -= CAPACITY+1 + (u[j] ? w[j] : 0 );
     }
     u[0] = T[i] != 0;
 }
@@ -104,11 +104,11 @@ void backtrack( int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, sh
 //
 //  serial solver to check correctness
 //
-int solve_serial( int cap, shared int *w, shared int *v ) {
+int solve_serial( shared int *w, shared int *v ) {
     int i, j, best, *allocated, *T, wj, vj;
 
     // alloc local resources
-    T = allocated = malloc( NITEMS*(cap+1)*sizeof(int) );
+    T = allocated = malloc( NITEMS*(CAPACITY+1)*sizeof(int) );
     if( !allocated ) {
         fprintf( stderr, "Failed to allocate memory" );
         upc_global_exit( -1 );
@@ -118,15 +118,15 @@ int solve_serial( int cap, shared int *w, shared int *v ) {
     wj = w[0];
     vj = v[0];
     for( i = 0;  i <  wj;  i++ ) T[i] = 0;
-    for( i = wj; i <= cap; i++ ) T[i] = vj;
+    for( i = wj; i <= CAPACITY; i++ ) T[i] = vj;
     for( j = 1; j < NITEMS; j++ ) {
         wj = w[j];
         vj = v[j];
-        for( i = 0;  i <  wj;  i++ ) T[i+cap+1] = T[i];
-        for( i = wj; i <= cap; i++ ) T[i+cap+1] = max( T[i], T[i-wj]+vj );
-        T += cap+1;
+        for( i = 0;  i <  wj;  i++ ) T[i+CAPACITY+1] = T[i];
+        for( i = wj; i <= CAPACITY; i++ ) T[i+CAPACITY+1] = max( T[i], T[i-wj]+vj );
+        T += CAPACITY+1;
     }
-    best = T[cap];
+    best = T[CAPACITY];
 
     // free resources
     free( allocated );
@@ -176,10 +176,7 @@ int main( int argc, char** argv ) {
     int max_value  = 1000;
     int max_weight = 1000;
 
-    // these set the problem size
-    int capacity   = CAPACITY;
-
-    int block_width = (capacity + 1) / THREADS;
+    int block_width = (CAPACITY + 1) / THREADS;
     int block_height = NITEMS / THREADS;
 
     srand48( (unsigned int)time(NULL) + MYTHREAD );
@@ -189,8 +186,8 @@ int main( int argc, char** argv ) {
     value  = (shared int *) upc_all_alloc( NITEMS, sizeof(int) );
     used   = (shared int *) upc_all_alloc( NITEMS, sizeof(int) );
     total  = (shared [PROCESSOR_BLOCK_SIZE] int *) upc_all_alloc( THREADS, PROCESSOR_BLOCK_SIZE * sizeof(int) );
-    // total  = (shared int *) upc_all_alloc( NITEMS * (capacity+1) / block_width, sizeof(int) * block_width );
-    // total  = (shared int *) upc_all_alloc( NITEMS * (capacity+1), sizeof(int) );
+    // total  = (shared int *) upc_all_alloc( NITEMS * (CAPACITY+1) / block_width, sizeof(int) * block_width );
+    // total  = (shared int *) upc_all_alloc( NITEMS * (CAPACITY+1), sizeof(int) );
 
     if( !weight || !value || !total || !used ) {
         fprintf( stderr, "Failed to allocate memory" );
@@ -198,7 +195,7 @@ int main( int argc, char** argv ) {
     }
 
     // init
-    max_weight = min( max_weight, capacity ); // don't generate items that don't fit into bag
+    max_weight = min( max_weight, CAPACITY ); // don't generate items that don't fit into bag
     upc_forall( i = 0; i < NITEMS; i++; i ) {
         weight[i] = 1 + (lrand48()%max_weight);
         value[i]  = 1 + (lrand48()%max_value);
@@ -219,16 +216,16 @@ int main( int argc, char** argv ) {
     // time the solution
     seconds = read_timer( );
 
-    best_value = build_table( capacity, total, weight, value, block_width, block_height, locks );
-    backtrack( capacity, total, weight, used );
+    best_value = build_table( total, weight, value, block_width, block_height, locks );
+    backtrack( total, weight, used );
 
     seconds = read_timer( ) - seconds;
 
     // check the result
     if( MYTHREAD == 0 ) {
-        printf( "%d items, capacity: %d, time: %g\n", NITEMS, capacity, seconds );
+        printf( "%d items, capacity: %d, time: %g\n", NITEMS, CAPACITY, seconds );
 
-        best_value_serial = solve_serial( capacity, weight, value );
+        best_value_serial = solve_serial( weight, value );
 
         total_weight = nused = total_value = 0;
         for( i = 0; i < NITEMS; i++ ) {
@@ -241,7 +238,7 @@ int main( int argc, char** argv ) {
 
         printf( "%d items used, value %d, weight %d\n", nused, total_value, total_weight );
 
-        if( best_value != best_value_serial || best_value != total_value || total_weight > capacity ) {
+        if( best_value != best_value_serial || best_value != total_value || total_weight > CAPACITY ) {
             printf( "WRONG SOLUTION\n" );
         }
 

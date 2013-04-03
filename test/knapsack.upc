@@ -26,28 +26,35 @@ double read_timer( )
 //
 //  solvers
 //
-int build_table( int nitems, int cap, shared int *T, shared int *w, shared int *v )
+int build_table( int nitems, int cap, shared int *T, shared int *w, shared int *v, int block_size, upc_lock_t** locks )
 {
-    int wj, vj;
-
-    wj = w[0];
-    vj = v[0];
-    upc_forall( int i = 0;  i <  wj;  i++; &T[i] ) T[i] = 0;
-    upc_forall( int i = wj; i <= cap; i++; &T[i] ) T[i] = vj;
-    upc_barrier;
-
-    for( int j = 1; j < nitems; j++ )
-    {
-        wj = w[j];
-        vj = v[j];
-        upc_forall( int i = 0;  i <  wj;  i++; &T[i] ) T[i+cap+1] = T[i];
-        upc_forall( int i = wj; i <= cap; i++; &T[i] ) T[i+cap+1] = max( T[i], T[i-wj]+vj );
-        upc_barrier;
-
-        T += cap+1;
+    if (MYTHREAD == 0) {
+        for (int i = 0; i < w[0]; i++) T[i] = 0;
+        for (int i = w[0]; i <= cap; i++) T[i] = v[0];
     }
 
-    return T[cap];
+    int w_item, v_item, T_start, T_start_prev, i, lock_index, counter;
+    upc_forall( int item = 1; item < nitems; item++; item ) {
+        w_item = w[item];
+        v_item = v[item];
+        T_start = item * (cap + 1);
+        T_start_prev = T_start - (cap + 1);
+        i = 0;
+        for (int block = 0; block < THREADS; block++) {
+            lock_index = item * THREADS + block;
+            upc_lock(locks[lock_index]);
+            for (counter = 0; counter < block_size; counter++) {
+                if (i < w_item) {
+                    T[T_start + i] = T[T_start_prev + i];
+                } else {
+                    T[T_start + i] = max( T[T_start_prev + i], T[T_start_prev + i - w_item] + v_item );
+                }
+                i++;
+                upc_unlock(locks[lock_index + THREADS]);
+            }
+        }
+    }
+    return T[(cap+1) * nitems - 1];
 }
 
 void backtrack( int nitems, int cap, shared int *T, shared int *w, shared int *u )
@@ -135,14 +142,14 @@ int main( int argc, char** argv )
     // total  = (shared int *) upc_all_alloc( nitems * (capacity+1), sizeof(int) );
 
     int num_locks = nitems * THREADS;
-    locks = (shared upc_lock_t**) upc_all_alloc( nitems, THREADS * sizeof(upc_lock_t*) );
+    locks = (shared upc_lock_t **) upc_all_alloc( nitems, THREADS * sizeof(upc_lock_t*) );
 
     for( int i = 0; i < num_locks; i++ ) {
-        locks[i] = upc_global_lock_alloc();
-        upc_lock(locks[i]);
+        locks[i] = upc_all_lock_alloc();
+        if (i >= THREADS) {
+            upc_lock(locks[i]);
+        }
     }
-    upc_unlock(locks[0]);
-
 
     if( !weight || !value || !total || !used )
     {
@@ -163,7 +170,7 @@ int main( int argc, char** argv )
     // time the solution
     seconds = read_timer( );
 
-    best_value = build_table( nitems, capacity, total, weight, value );
+    best_value = build_table( nitems, capacity, total, weight, value, block_size, locks );
     backtrack( nitems, capacity, total, weight, used );
 
     seconds = read_timer( ) - seconds;
@@ -193,7 +200,7 @@ int main( int argc, char** argv )
         for( int i = 0; i < num_locks; i++ ) {
             upc_lock_free(locks[i]);
         }
-        upc_free( locks );
+        //upc_free( locks );
         upc_free( weight );
         upc_free( value );
         upc_free( total );

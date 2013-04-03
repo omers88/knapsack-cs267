@@ -1,7 +1,7 @@
 # You must use PrgEnv-cray.
 
 CC = CC -O3
-UPCC = cc -h upc -O -q
+UPCC = cc -h upc -O
 # If you change this, also change the mppwidth parameter in "job-knapsack" accordingly
 NTHREADS = 4
 

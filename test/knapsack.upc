@@ -54,6 +54,7 @@ int build_table( int nitems, int cap, shared int *T, shared int *w, shared int *
             }
         }
     }
+    upc_barrier;
     return T[(cap+1) * nitems - 1];
 }
 
@@ -142,14 +143,6 @@ int main( int argc, char** argv )
     // total  = (shared int *) upc_all_alloc( nitems * (capacity+1), sizeof(int) );
 
     int num_locks = nitems * THREADS;
-    locks = (shared upc_lock_t **) upc_all_alloc( nitems, THREADS * sizeof(upc_lock_t*) );
-
-    for( int i = 0; i < num_locks; i++ ) {
-        locks[i] = upc_all_lock_alloc();
-        if (i >= THREADS) {
-            upc_lock(locks[i]);
-        }
-    }
 
     if( !weight || !value || !total || !used )
     {
@@ -166,6 +159,14 @@ int main( int argc, char** argv )
     }
 
     upc_barrier;
+
+    locks = (shared upc_lock_t **) upc_all_alloc( nitems, THREADS * sizeof(upc_lock_t*) );
+    for( int i = 0; i < num_locks; i++ ) {
+        locks[i] = upc_all_lock_alloc();
+        if (i >= THREADS) {
+            upc_lock(locks[i]);
+        }
+    }
 
     // time the solution
     seconds = read_timer( );

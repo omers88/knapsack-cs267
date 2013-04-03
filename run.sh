@@ -10,3 +10,5 @@ qstat -u omers88
 # qsub -I -V -q interactive -l mppwidth=96
 # (wait for node)
 # make && aprun -n 4 -N 1 ./knapsack
+# make && aprun -n 4 -N 1 ./knapsack_orig
+# make && aprun -n 1 -N 1 ./serial

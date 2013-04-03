@@ -65,8 +65,8 @@ int main (int argc, char** argv)
     int max_weight = 1000;
     
     //these set the problem size
-    int capacity   = 999;
-    int nitems     = 5000;
+    int capacity   = 1536 - 1; // divisible by 192 (ignoring -1)
+    int nitems     = 6144; // divisible by 192
     
     //allocate arrays
     int *weight = (int*)malloc( nitems * sizeof(int) );

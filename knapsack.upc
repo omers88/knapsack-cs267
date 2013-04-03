@@ -5,6 +5,11 @@
 #include <upc.h>
 #include <upc_collective.h>
 
+#define CAPACITY 1536 - 1
+#define NITEMS 6144
+// #define PROCESSOR_BLOCK_SIZE CAPACITY * NITEMS / THREADS
+#define PROCESSOR_BLOCK_SIZE 2359296
+
 //
 // auxiliary functions
 //
@@ -25,17 +30,12 @@ double read_timer( ) {
 //
 //  solvers
 //
-int build_table( int nitems, int cap, shared int *T, shared int *w, shared int *v, int block_width, int block_height, upc_lock_t** locks ) {
-    printf("0: %d\n", upc_threadof(T));
-    printf("1: %d\n", upc_threadof(T + 1));
-    printf("2: %d\n", upc_threadof(T + 2));
-    printf("3: %d\n", upc_threadof(T + 3));
+int build_table( int nitems, int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *v, int block_width, int block_height, upc_lock_t** locks ) {
 
     //TODO: check blocking, lock array
     int w_item, v_item, col_index, row_start, prev_row_start, lock_index;
     int T_start = (cap+1) * (block_height * MYTHREAD);
-    // int* T_local = (int *) (T + T_start);
-    int* T_local = (int *) &T[T_start];
+    int* T_local = (int *) (T + T_start);
     int T_start_prev = T_start - (cap+1);
 
     // Calculate top row
@@ -50,7 +50,6 @@ int build_table( int nitems, int cap, shared int *T, shared int *w, shared int *
         // Acquire lock
         lock_index = THREADS * MYTHREAD + block;
         upc_lock(locks[lock_index]);
-        printf("Thread %d acquired lock %d\n", MYTHREAD, lock_index);
 
         // Calculate top row of block
         if (MYTHREAD != 0) {
@@ -60,10 +59,8 @@ int build_table( int nitems, int cap, shared int *T, shared int *w, shared int *
             for (int col = col_index; col < col_index + block_width; col++) {
                 if (col < w_item) {
                     T_local[col] = T[T_start_prev + col];
-                    // T[col + T_start] = T[T_start_prev + col];
                 } else {
                     T_local[col] = max( T[T_start_prev + col], T[T_start_prev + col - w_item] + v_item );
-                    // T[col + T_start] = max( T[T_start_prev + col], T[T_start_prev + col - w_item] + v_item );
                 }
             }
         }
@@ -76,10 +73,8 @@ int build_table( int nitems, int cap, shared int *T, shared int *w, shared int *
             for (int col = col_index; col < col_index + block_width; col++) {
                 if (col < w_item) {
                     T_local[row_start + col] = T_local[prev_row_start + col];
-                    // T[row_start + col + T_start] = T[prev_row_start + col + T_start];
                 } else {
                     T_local[row_start + col] = max( T_local[prev_row_start + col], T_local[prev_row_start + col - w_item] + v_item );
-                    // T[row_start + col + T_start] = max( T[prev_row_start + col + T_start], T[prev_row_start + col - w_item + T_start] + v_item );
                 }
             }
         }
@@ -88,7 +83,6 @@ int build_table( int nitems, int cap, shared int *T, shared int *w, shared int *
         upc_unlock(locks[lock_index]);
         if (MYTHREAD != THREADS - 1) {
             upc_unlock(locks[lock_index + THREADS]);
-            printf("Thread %d unlocked %d\n", MYTHREAD, lock_index+THREADS);
         }
     }
 
@@ -96,7 +90,7 @@ int build_table( int nitems, int cap, shared int *T, shared int *w, shared int *
     return T[(cap+1) * nitems - 1];
 }
 
-void backtrack( int nitems, int cap, shared int *T, shared int *w, shared int *u ) {
+void backtrack( int nitems, int cap, shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *u ) {
     int i, j;
 
     if( MYTHREAD != 0 ) return;
@@ -177,7 +171,7 @@ int main( int argc, char** argv ) {
     shared int *weight;
     shared int *value;
     shared int *used;
-    shared int *total;
+    shared [PROCESSOR_BLOCK_SIZE] int *total;
     upc_lock_t **locks;
 
     // these constants have little effect on runtime
@@ -185,8 +179,8 @@ int main( int argc, char** argv ) {
     int max_weight = 1000;
 
     // these set the problem size
-    int capacity   = 1536 - 1; // divisible by 192 (ignoring -1)
-    int nitems     = 6144; // divisible by 192
+    int capacity   = CAPACITY;
+    int nitems     = NITEMS;
 
     int block_width = (capacity + 1) / THREADS;
     int block_height = nitems / THREADS;
@@ -197,7 +191,7 @@ int main( int argc, char** argv ) {
     weight = (shared int *) upc_all_alloc( nitems, sizeof(int) );
     value  = (shared int *) upc_all_alloc( nitems, sizeof(int) );
     used   = (shared int *) upc_all_alloc( nitems, sizeof(int) );
-    total  = (shared int *) upc_all_alloc( THREADS, THREADS * (capacity+1) * sizeof(int) );
+    total  = (shared [PROCESSOR_BLOCK_SIZE] int *) upc_all_alloc( THREADS, PROCESSOR_BLOCK_SIZE * sizeof(int) );
     // total  = (shared int *) upc_all_alloc( nitems * (capacity+1) / block_width, sizeof(int) * block_width );
     // total  = (shared int *) upc_all_alloc( nitems * (capacity+1), sizeof(int) );
 

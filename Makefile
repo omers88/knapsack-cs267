@@ -1,10 +1,9 @@
 # You must use PrgEnv-cray.
 
 CC = CC -O3
-UPCC = cc -h upc -O
+UPCC = cc -h upc -O -X 4
 #UPCC = upcc -O
 # If you change this, also change the mppwidth parameter in "job-knapsack" accordingly
-NTHREADS = 4
 
 TARGETS=serial knapsack knapsack_orig
 

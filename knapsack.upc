@@ -25,45 +25,86 @@ double read_timer( ) {
 //
 //  solvers
 //
-int build_table( int nitems, int cap, shared int *T, shared int *w, shared int *v, int block_size, upc_lock_t** locks ) {
+int build_table( int nitems, int cap, shared int *T, shared int *w, shared int *v, int block_width, int block_height, upc_lock_t** locks ) {
+    printf("0: %d\n", upc_threadof(T));
+    printf("1: %d\n", upc_threadof(T + 1));
+    printf("2: %d\n", upc_threadof(T + 2));
+    printf("3: %d\n", upc_threadof(T + 3));
+
+    //TODO: check blocking, lock array
+    int w_item, v_item, col_index, row_start, prev_row_start, lock_index;
+    int T_start = (cap+1) * (block_height * MYTHREAD);
+    // int* T_local = (int *) (T + T_start);
+    int* T_local = (int *) &T[T_start];
+    int T_start_prev = T_start - (cap+1);
+
+    // Calculate top row
     if (MYTHREAD == 0) {
         for (int i = 0; i < w[0]; i++) T[i] = 0;
         for (int i = w[0]; i <= cap; i++) T[i] = v[0];
-        for (int i = 0; i < THREADS; i++) {
-            upc_unlock(locks[i+THREADS]);
+    }
+
+    for (int block = 0; block < THREADS; block++) {
+        col_index = block_width * block;
+
+        // Acquire lock
+        lock_index = THREADS * MYTHREAD + block;
+        upc_lock(locks[lock_index]);
+        printf("Thread %d acquired lock %d\n", MYTHREAD, lock_index);
+
+        // Calculate top row of block
+        if (MYTHREAD != 0) {
+            w_item = w[block_height * MYTHREAD];
+            v_item = v[block_height * MYTHREAD];
+
+            for (int col = col_index; col < col_index + block_width; col++) {
+                if (col < w_item) {
+                    T_local[col] = T[T_start_prev + col];
+                    // T[col + T_start] = T[T_start_prev + col];
+                } else {
+                    T_local[col] = max( T[T_start_prev + col], T[T_start_prev + col - w_item] + v_item );
+                    // T[col + T_start] = max( T[T_start_prev + col], T[T_start_prev + col - w_item] + v_item );
+                }
+            }
+        }
+        // Do rest of block with private pointer
+        // if (MYTHREAD == 2) printf("block_height: %d\n",block_height);
+        // if (MYTHREAD == 2) printf("block_width: %d\n",block_width);
+        for (int row = 1; row < block_height; row++) {
+            w_item = w[block_height * MYTHREAD + row];
+            v_item = v[block_height * MYTHREAD + row];
+            row_start = row * (cap + 1);
+            prev_row_start = row_start - (cap+1);
+            // if (MYTHREAD == 2 && row == 1317) printf("v_item = %d, w_item = %d\n", v_item, w_item);
+            for (int col = col_index; col < col_index + block_width; col++) {
+                if (MYTHREAD == 2 && row == 1317 && col > 200) printf("col: %d\n",col);
+                if (MYTHREAD == 2 && row == 1317 && col ==208) printf("poop1\n");
+                if (col < w_item) {
+                    if (MYTHREAD == 2 && row == 1317 && col ==208) printf("poop2\n");
+                    if (MYTHREAD == 2 && row == 1317 && col ==208) {
+                        printf("prevprev: %d\n", upc_threadof(T + row_start + col + T_start - 2));
+                        printf("prev: %d\n", upc_threadof(T + row_start + col + T_start - 1));
+                        printf("current: %d\n", upc_threadof(T + row_start + col + T_start));
+                    }
+                    T_local[row_start + col] = T_local[prev_row_start + col];
+                    // T[row_start + col + T_start] = T[prev_row_start + col + T_start];
+                } else {
+                    // if (MYTHREAD == 2 && row == 1317 && col > 200) printf("poop\n");
+                    T_local[row_start + col] = max( T_local[prev_row_start + col], T_local[prev_row_start + col - w_item] + v_item );
+                    // T[row_start + col + T_start] = max( T[prev_row_start + col + T_start], T[prev_row_start + col - w_item + T_start] + v_item );
+                }
+            }
+        }
+
+        // Free next lock
+        upc_unlock(locks[lock_index]);
+        if (MYTHREAD != THREADS - 1) {
+            upc_unlock(locks[lock_index + THREADS]);
+            printf("Thread %d unlocked %d\n", MYTHREAD, lock_index+THREADS);
         }
     }
 
-    int w_item, v_item, T_start, T_start_prev, i, lock_index, counter;
-    upc_forall( int item = 1; item < nitems; item++; item ) {
-        w_item = w[item];
-        v_item = v[item];
-        T_start = item * (cap + 1);
-        T_start_prev = T_start - (cap + 1);
-        i = 0;
-        for (int block = 0; block < THREADS; block++) {
-            lock_index = item * THREADS + block;
-            // printf("Thread %i attempting to unlock lock %i\n",MYTHREAD,lock_index);
-            upc_lock(locks[lock_index]);
-            for (counter = 0; counter < block_size; counter++) {
-                if (i < w_item) {
-                    T[T_start + i] = T[T_start_prev + i];
-                } else {
-                    T[T_start + i] = max( T[T_start_prev + i], T[T_start_prev + i - w_item] + v_item );
-                }
-                i++;
-            }
-            upc_unlock(locks[lock_index]);
-            // printf("Thread %i trying to unlock lock %i",MYTHREAD,lock_index+THREADS);
-            if (item < nitems-1) {
-                upc_unlock(locks[lock_index + THREADS]);
-            }
-        }
-        if (item % 100 == 0) {
-            printf("Item %i completed\n",item);
-        }
-    }
-    upc_barrier;
+    upc_barrier; // TODO try removing
     return T[(cap+1) * nitems - 1];
 }
 
@@ -159,7 +200,8 @@ int main( int argc, char** argv ) {
     int capacity   = 1536 - 1; // divisible by 192 (ignoring -1)
     int nitems     = 6144; // divisible by 192
 
-    int block_size = (capacity + 1) / THREADS;
+    int block_width = (capacity + 1) / THREADS;
+    int block_height = nitems / THREADS;
 
     srand48( (unsigned int)time(NULL) + MYTHREAD );
 
@@ -167,10 +209,9 @@ int main( int argc, char** argv ) {
     weight = (shared int *) upc_all_alloc( nitems, sizeof(int) );
     value  = (shared int *) upc_all_alloc( nitems, sizeof(int) );
     used   = (shared int *) upc_all_alloc( nitems, sizeof(int) );
-    total  = (shared int *) upc_all_alloc( nitems * (capacity+1) / block_size, sizeof(int) * block_size );
+    total  = (shared int *) upc_all_alloc( THREADS, THREADS * (capacity+1) * sizeof(int) );
+    // total  = (shared int *) upc_all_alloc( nitems * (capacity+1) / block_width, sizeof(int) * block_width );
     // total  = (shared int *) upc_all_alloc( nitems * (capacity+1), sizeof(int) );
-
-    int num_locks = nitems * THREADS;
 
     if( !weight || !value || !total || !used ) {
         fprintf( stderr, "Failed to allocate memory" );
@@ -186,22 +227,20 @@ int main( int argc, char** argv ) {
 
     upc_barrier;
 
+    int num_locks = THREADS * THREADS;
     // locks = (shared upc_lock_t **) upc_all_alloc( nitems, THREADS * sizeof(upc_lock_t*) );
     locks = allocate_lock_array(num_locks);
-    int item;
-    upc_forall( i = 1; i < nitems; i++; i-1 ) {
-        for ( int j = 0; j < THREADS; j++ ) {
-            // printf("Processor %i locking number%i\n",MYTHREAD,i*THREADS+j);
-            upc_lock(locks[i*THREADS + j]);
+    upc_forall( int row = 1; row < THREADS; row++; row-1 ) {
+        for ( int col = 0; col < THREADS; col++ ) {
+            upc_lock(locks[row*THREADS + col]);
         }
     }
-
     upc_barrier;
 
     // time the solution
     seconds = read_timer( );
 
-    best_value = build_table( nitems, capacity, total, weight, value, block_size, locks );
+    best_value = build_table( nitems, capacity, total, weight, value, block_width, block_height, locks );
     backtrack( nitems, capacity, total, weight, used );
 
     seconds = read_timer( ) - seconds;

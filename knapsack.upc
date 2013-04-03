@@ -7,8 +7,10 @@
 
 #define CAPACITY (1536 - 1)
 #define NITEMS 6144
-// #define PROCESSOR_BLOCK_SIZE CAPACITY * NITEMS / THREADS
+// #define PROCESSOR_BLOCK_SIZE (CAPACITY * NITEMS / THREADS)
 #define PROCESSOR_BLOCK_SIZE 2359296
+#define BLOCK_WIDTH ((CAPACITY + 1) / THREADS)
+#define BLOCK_HEIGHT (NITEMS / THREADS)
 
 //
 // auxiliary functions
@@ -30,9 +32,9 @@ double read_timer( ) {
 //
 //  solvers
 //
-int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *v, int block_width, int block_height, upc_lock_t** locks ) {
+int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *v, upc_lock_t** locks ) {
     int w_item, v_item, col_index, row_start, prev_row_start, lock_index;
-    int T_start = (CAPACITY+1) * (block_height * MYTHREAD);
+    int T_start = (CAPACITY+1) * (BLOCK_HEIGHT * MYTHREAD);
     int* T_local = (int *) (T + T_start);
     int T_start_prev = T_start - (CAPACITY+1);
 
@@ -43,7 +45,7 @@ int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int
     }
 
     for (int block = 0; block < THREADS; block++) {
-        col_index = block_width * block;
+        col_index = BLOCK_WIDTH * block;
 
         // Acquire lock
         lock_index = THREADS * MYTHREAD + block;
@@ -51,10 +53,10 @@ int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int
 
         // Calculate top row of block
         if (MYTHREAD != 0) {
-            w_item = w[block_height * MYTHREAD];
-            v_item = v[block_height * MYTHREAD];
+            w_item = w[BLOCK_HEIGHT * MYTHREAD];
+            v_item = v[BLOCK_HEIGHT * MYTHREAD];
 
-            for (int col = col_index; col < col_index + block_width; col++) {
+            for (int col = col_index; col < col_index + BLOCK_WIDTH; col++) {
                 if (col < w_item) {
                     T_local[col] = T[T_start_prev + col];
                 } else {
@@ -63,12 +65,12 @@ int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int
             }
         }
         // Do rest of block with private pointer
-        for (int row = 1; row < block_height; row++) {
-            w_item = w[block_height * MYTHREAD + row];
-            v_item = v[block_height * MYTHREAD + row];
+        for (int row = 1; row < BLOCK_HEIGHT; row++) {
+            w_item = w[BLOCK_HEIGHT * MYTHREAD + row];
+            v_item = v[BLOCK_HEIGHT * MYTHREAD + row];
             row_start = row * (CAPACITY + 1);
             prev_row_start = row_start - (CAPACITY+1);
-            for (int col = col_index; col < col_index + block_width; col++) {
+            for (int col = col_index; col < col_index + BLOCK_WIDTH; col++) {
                 if (col < w_item) {
                     T_local[row_start + col] = T_local[prev_row_start + col];
                 } else {
@@ -176,9 +178,6 @@ int main( int argc, char** argv ) {
     int max_value  = 1000;
     int max_weight = 1000;
 
-    int block_width = (CAPACITY + 1) / THREADS;
-    int block_height = NITEMS / THREADS;
-
     srand48( (unsigned int)time(NULL) + MYTHREAD );
 
     // allocate distributed arrays, use cyclic distribution
@@ -186,8 +185,6 @@ int main( int argc, char** argv ) {
     value  = (shared int *) upc_all_alloc( NITEMS, sizeof(int) );
     used   = (shared int *) upc_all_alloc( NITEMS, sizeof(int) );
     total  = (shared [PROCESSOR_BLOCK_SIZE] int *) upc_all_alloc( THREADS, PROCESSOR_BLOCK_SIZE * sizeof(int) );
-    // total  = (shared int *) upc_all_alloc( NITEMS * (CAPACITY+1) / block_width, sizeof(int) * block_width );
-    // total  = (shared int *) upc_all_alloc( NITEMS * (CAPACITY+1), sizeof(int) );
 
     if( !weight || !value || !total || !used ) {
         fprintf( stderr, "Failed to allocate memory" );
@@ -216,7 +213,7 @@ int main( int argc, char** argv ) {
     // time the solution
     seconds = read_timer( );
 
-    best_value = build_table( total, weight, value, block_width, block_height, locks );
+    best_value = build_table( total, weight, value, locks );
     backtrack( total, weight, used );
 
     seconds = read_timer( ) - seconds;
@@ -247,7 +244,7 @@ int main( int argc, char** argv ) {
             upc_lock_free(locks[i]);
         }
         // upc_free( locks );
-        // TODO free
+        // TODO free locks
         upc_free( weight );
         upc_free( value );
         upc_free( total );

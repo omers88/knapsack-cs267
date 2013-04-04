@@ -7,7 +7,7 @@
 
 #define CAPACITY (1536 - 1)
 #define NITEMS 6144
-#define CYCLES 2
+#define CYCLES 1
 #define BLOCK_WIDTH ((CAPACITY + 1) / THREADS)
 #define BLOCK_HEIGHT (NITEMS / THREADS / CYCLES)
 #define PROCESSOR_BLOCK_SIZE (BLOCK_HEIGHT * (CAPACITY + 1))
@@ -204,7 +204,6 @@ int main( int argc, char** argv ) {
         weight[i] = 1 + (lrand48()%max_weight);
         value[i]  = 1 + (lrand48()%max_value);
     }
-
     upc_barrier;
 
     // locks = (shared upc_lock_t**) upc_all_alloc( NUM_LOCKS, sizeof(upc_lock_t*) );

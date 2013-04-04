@@ -1,0 +1,23 @@
+#PBS -l walltime=00:30:00
+#PBS -l mppwidth=96
+#PBS -l mppnppn=1
+#PBS -j oe
+#PBS -V
+
+#cd $PBS_O_WORKDIR
+module swap PrgEnv-pgi PrgEnv-cray
+
+for CYCLES in 1 2 4; do
+	for NPROCS in 1 2 3 4 8 12 16; do # 8 12 16 24 32 64 128 164 194
+		for CAPACITY in 6143; do
+			for NITEMS in 6144; do
+				echo Compiling
+				cc -h upc -O -X $NPROCS -DCAPACITY=$CAPACITY -DNITEMS=$NITEMS -DCYCLES=$CYCLES -o knapsack knapsack.upc
+				echo "NPROCS: $NPROCS	CAPACITY: $CAPACITY	NITEMS: $NITEMS	CYCLES: $CYCLES"
+				export UPC_SHARED_HEAP_SIZE=4GB
+				aprun -n $NPROCS -N $(($NPROCS<24?$NPROCS:24)) ./knapsack
+				echo 
+			done
+		done
+	done
+done

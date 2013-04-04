@@ -33,8 +33,9 @@ double read_timer( ) {
 //
 //  solvers
 //
-int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *v, upc_lock_t** locks ) {
+int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared [BLOCK_HEIGHT] int *w, shared [BLOCK_HEIGHT] int *v, upc_lock_t** locks ) {
     int w_item, v_item, col_index, row_start, prev_row_start, lock_index, T_start, T_start_prev;
+    int *T_local, *w_local, *v_local;
 
     // Calculate top row
     if (MYTHREAD == 0) {
@@ -45,7 +46,11 @@ int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int
     for (int cycle = 0; cycle < CYCLES; cycle++) {
         T_start = (CAPACITY+1) * (BLOCK_HEIGHT * (MYTHREAD + cycle*THREADS));
         T_start_prev = T_start - (CAPACITY+1);
-        int* T_local = (int *) (T + T_start);
+        T_local = (int *) (T + T_start);
+
+        w_local = (int *) (w + BLOCK_HEIGHT * (MYTHREAD + cycle*THREADS));
+        v_local = (int *) (v + BLOCK_HEIGHT * (MYTHREAD + cycle*THREADS));
+
         for (int block = 0; block < THREADS; block++) {
             col_index = BLOCK_WIDTH * block;
 
@@ -55,9 +60,8 @@ int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int
 
             // Calculate top row of block
             if (!(cycle == 0 && MYTHREAD == 0)) {
-                w_item = w[BLOCK_HEIGHT * (MYTHREAD + cycle*THREADS)];
-                v_item = v[BLOCK_HEIGHT * (MYTHREAD + cycle*THREADS)];
-
+                w_item = w_local[0];
+                v_item = v_local[0];
                 for (int col = col_index; col < col_index + BLOCK_WIDTH; col++) {
                     if (col < w_item) {
                         T_local[col] = T[T_start_prev + col];
@@ -68,10 +72,8 @@ int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int
             }
             // Do rest of block with private pointer
             for (int row = 1; row < BLOCK_HEIGHT; row++) {
-                w_item = w[BLOCK_HEIGHT * (MYTHREAD + cycle*THREADS) + row];
-                v_item = v[BLOCK_HEIGHT * (MYTHREAD + cycle*THREADS) + row];
-                // printf("w: Thread: %d, Affinity: %d\n", MYTHREAD, upc_threadof(&w[BLOCK_HEIGHT * (MYTHREAD + cycle*THREADS) + row]));
-                // printf("v: Thread: %d, Affinity: %d\n", MYTHREAD, upc_threadof(&v[BLOCK_HEIGHT * (MYTHREAD + cycle*THREADS) + row]));
+                w_item = w_local[row];
+                v_item = v_local[row];
                 row_start = row * (CAPACITY + 1);
                 prev_row_start = row_start - (CAPACITY+1);
                 for (int col = col_index; col < col_index + BLOCK_WIDTH; col++) {
@@ -95,7 +97,7 @@ int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int
     return T[(CAPACITY+1) * NITEMS - 1];
 }
 
-void backtrack( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int *u ) {
+void backtrack( shared [PROCESSOR_BLOCK_SIZE] int *T, shared [BLOCK_HEIGHT] int *w, shared int *u ) {
     int i, j;
 
     if( MYTHREAD != 0 ) return;
@@ -111,7 +113,7 @@ void backtrack( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int 
 //
 //  serial solver to check correctness
 //
-int solve_serial( shared int *w, shared int *v ) {
+int solve_serial( shared [BLOCK_HEIGHT] int *w, shared [BLOCK_HEIGHT] int *v ) {
     int i, j, best, *allocated, *T, wj, vj;
 
     // alloc local resources
@@ -173,8 +175,8 @@ upc_lock_t **allocate_lock_array(unsigned int count) {
 int main( int argc, char** argv ) {
     int i, best_value, best_value_serial, total_weight, nused, total_value;
     double seconds;
-    shared int *weight;
-    shared int *value;
+    shared [BLOCK_HEIGHT] int *weight;
+    shared [BLOCK_HEIGHT] int *value;
     shared int *used;
     shared [PROCESSOR_BLOCK_SIZE] int *total;
     upc_lock_t **locks;
@@ -186,8 +188,8 @@ int main( int argc, char** argv ) {
     srand48( (unsigned int)time(NULL) + MYTHREAD );
 
     // allocate distributed arrays, use cyclic distribution
-    weight = (shared int *) upc_all_alloc( NITEMS, sizeof(int) );
-    value  = (shared int *) upc_all_alloc( NITEMS, sizeof(int) );
+    weight = (shared [BLOCK_HEIGHT] int *) upc_all_alloc( THREADS * CYCLES, BLOCK_HEIGHT * sizeof(int) );
+    value  = (shared [BLOCK_HEIGHT] int *) upc_all_alloc( THREADS * CYCLES, BLOCK_HEIGHT * sizeof(int) );
     used   = (shared int *) upc_all_alloc( NITEMS, sizeof(int) );
     total  = (shared [PROCESSOR_BLOCK_SIZE] int *) upc_all_alloc( THREADS * CYCLES, PROCESSOR_BLOCK_SIZE * sizeof(int) );
 
@@ -251,11 +253,7 @@ int main( int argc, char** argv ) {
         for( int i = 0; i < NUM_LOCKS; i++ ) {
             upc_lock_free(locks[i]);
         }
-        // free( locks );
-        // TODO free locks
-        // if (!MYTHREAD) {
-        //     free(locks);
-        // }
+        // TODO free locks?
         upc_free( weight );
         upc_free( value );
         upc_free( total );

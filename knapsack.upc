@@ -7,10 +7,11 @@
 
 #define CAPACITY (1536 - 1)
 #define NITEMS 6144
-// #define PROCESSOR_BLOCK_SIZE (CAPACITY * NITEMS / THREADS)
-#define PROCESSOR_BLOCK_SIZE 2359296
+#define CYCLES 2
 #define BLOCK_WIDTH ((CAPACITY + 1) / THREADS)
-#define BLOCK_HEIGHT (NITEMS / THREADS)
+#define BLOCK_HEIGHT (NITEMS / THREADS/ CYCLES)
+#define PROCESSOR_BLOCK_SIZE (BLOCK_HEIGHT * (CAPACITY + 1))
+#define NUM_LOCKS ((CAPACITY + 1) * NITEMS / PROCESSOR_BLOCK_SIZE * THREADS)
 
 //
 // auxiliary functions
@@ -43,46 +44,48 @@ int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared int *w, shared int
         for (int i = 0; i < w[0]; i++) T[i] = 0;
         for (int i = w[0]; i <= CAPACITY; i++) T[i] = v[0];
     }
+    
+    for (int cycle = 1; cycle <= CYCLES; cycle++) {
+        for (int block = 0; block < THREADS; block++) {
+            col_index = BLOCK_WIDTH * block;
 
-    for (int block = 0; block < THREADS; block++) {
-        col_index = BLOCK_WIDTH * block;
+            // Acquire lock
+            lock_index = THREADS * MYTHREAD + block;
+            upc_lock(locks[lock_index]);
 
-        // Acquire lock
-        lock_index = THREADS * MYTHREAD + block;
-        upc_lock(locks[lock_index]);
+            // Calculate top row of block
+            if (MYTHREAD != 0) {
+                w_item = w[BLOCK_HEIGHT * MYTHREAD * cycle];
+                v_item = v[BLOCK_HEIGHT * MYTHREAD * cycle];
 
-        // Calculate top row of block
-        if (MYTHREAD != 0) {
-            w_item = w[BLOCK_HEIGHT * MYTHREAD];
-            v_item = v[BLOCK_HEIGHT * MYTHREAD];
-
-            for (int col = col_index; col < col_index + BLOCK_WIDTH; col++) {
-                if (col < w_item) {
-                    T_local[col] = T[T_start_prev + col];
-                } else {
-                    T_local[col] = max( T[T_start_prev + col], T[T_start_prev + col - w_item] + v_item );
+                for (int col = col_index; col < col_index + BLOCK_WIDTH; col++) {
+                    if (col < w_item) {
+                        T_local[col] = T[T_start_prev + col];
+                    } else {
+                        T_local[col] = max( T[T_start_prev + col], T[T_start_prev + col - w_item] + v_item );
+                    }
                 }
             }
-        }
-        // Do rest of block with private pointer
-        for (int row = 1; row < BLOCK_HEIGHT; row++) {
-            w_item = w[BLOCK_HEIGHT * MYTHREAD + row];
-            v_item = v[BLOCK_HEIGHT * MYTHREAD + row];
-            row_start = row * (CAPACITY + 1);
-            prev_row_start = row_start - (CAPACITY+1);
-            for (int col = col_index; col < col_index + BLOCK_WIDTH; col++) {
-                if (col < w_item) {
-                    T_local[row_start + col] = T_local[prev_row_start + col];
-                } else {
-                    T_local[row_start + col] = max( T_local[prev_row_start + col], T_local[prev_row_start + col - w_item] + v_item );
+            // Do rest of block with private pointer
+            for (int row = 1; row < BLOCK_HEIGHT; row++) {
+                w_item = w[BLOCK_HEIGHT * MYTHREAD * cycle + row];
+                v_item = v[BLOCK_HEIGHT * MYTHREAD * cycle + row];
+                row_start = row * (CAPACITY + 1);
+                prev_row_start = row_start - (CAPACITY+1);
+                for (int col = col_index; col < col_index + BLOCK_WIDTH; col++) {
+                    if (col < w_item) {
+                        T_local[row_start + col] = T_local[prev_row_start + col];
+                    } else {
+                        T_local[row_start + col] = max( T_local[prev_row_start + col], T_local[prev_row_start + col - w_item] + v_item );
+                    }
                 }
             }
-        }
 
-        // Free next lock
-        upc_unlock(locks[lock_index]);
-        if (MYTHREAD != THREADS - 1) {
-            upc_unlock(locks[lock_index + THREADS]);
+            // Free next lock
+            upc_unlock(locks[lock_index]);
+            if (MYTHREAD != THREADS - 1 && cycle == CYCLES) {
+                upc_unlock(locks[lock_index + THREADS]);
+            }
         }
     }
 
@@ -200,9 +203,8 @@ int main( int argc, char** argv ) {
 
     upc_barrier;
 
-    int num_locks = THREADS * THREADS;
     // locks = (shared upc_lock_t **) upc_all_alloc( NITEMS, THREADS * sizeof(upc_lock_t*) );
-    locks = allocate_lock_array(num_locks);
+    locks = allocate_lock_array(NUM_LOCKS);
     upc_forall( int row = 1; row < THREADS; row++; row-1 ) {
         for ( int col = 0; col < THREADS; col++ ) {
             upc_lock(locks[row*THREADS + col]);
@@ -240,7 +242,7 @@ int main( int argc, char** argv ) {
         }
 
         // release resources
-        for( int i = 0; i < num_locks; i++ ) {
+        for( int i = 0; i < NUM_LOCKS; i++ ) {
             upc_lock_free(locks[i]);
         }
         // upc_free( locks );

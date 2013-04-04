@@ -18,6 +18,7 @@
 //
 inline int max( int a, int b ) { return a > b ? a : b; }
 inline int min( int a, int b ) { return a < b ? a : b; }
+upc_lock_t* shared *locks_shared;
 double read_timer( ) {
     static int initialized = 0;
     static struct timeval start;
@@ -47,7 +48,6 @@ int build_table( shared [PROCESSOR_BLOCK_SIZE] int *T, shared [BLOCK_HEIGHT] int
         T_start = (CAPACITY+1) * (BLOCK_HEIGHT * (MYTHREAD + cycle*THREADS));
         T_start_prev = T_start - (CAPACITY+1);
         T_local = (int *) (T + T_start);
-
         w_local = (int *) (w + BLOCK_HEIGHT * (MYTHREAD + cycle*THREADS));
         v_local = (int *) (v + BLOCK_HEIGHT * (MYTHREAD + cycle*THREADS));
 
@@ -146,7 +146,7 @@ int solve_serial( shared [BLOCK_HEIGHT] int *w, shared [BLOCK_HEIGHT] int *v ) {
 upc_lock_t **allocate_lock_array(unsigned int count) {
     const unsigned int blksize = ((count + THREADS - 1) / THREADS); // Roundup
     upc_lock_t* shared *tmp = upc_all_alloc(blksize*THREADS, sizeof(upc_lock_t*));
-    upc_lock_t* shared *table = upc_all_alloc(blksize*THREADS*THREADS, sizeof(upc_lock_t*));
+    locks_shared = upc_all_alloc(blksize*THREADS*THREADS, sizeof(upc_lock_t*));
 
     // Allocate lock pointers into a temporary array.
     // This code overlays an array of blocksize [*] over the cyclic one.
@@ -157,16 +157,16 @@ upc_lock_t **allocate_lock_array(unsigned int count) {
         ptmp[i] = upc_global_lock_alloc();
     }
 
-    // Replicate the temporary array THREADS times into the table array
+    // Replicate the temporary array THREADS times into the locks_shared array
     // IN_MYSYNC:   Since each thread generates its local portion of input.
     // OUT_ALLSYNC: Ensures upc_free() occurs only after tmp is unneeded.
-    upc_all_gather_all(table, tmp, blksize * sizeof(upc_lock_t*), UPC_IN_MYSYNC|UPC_OUT_ALLSYNC);
+    upc_all_gather_all(locks_shared, tmp, blksize * sizeof(upc_lock_t*), UPC_IN_MYSYNC|UPC_OUT_ALLSYNC);
 
-    if (!MYTHREAD) {
+    if (MYTHREAD == 0) {
         upc_free(tmp);  // Free the temporary array
     }
-    // Return a pointer-to-private for local piece of replicated table
-    return (upc_lock_t**)(&table[MYTHREAD]);
+    // Return a pointer-to-private for local piece of replicated locks_shared
+    return (upc_lock_t**)(&locks_shared[MYTHREAD]);
 }
 
 //
@@ -247,17 +247,18 @@ int main( int argc, char** argv ) {
         if( best_value != best_value_serial || best_value != total_value || total_weight > CAPACITY ) {
             printf( "WRONG SOLUTION\n" );
         }
+    }
 
-        // release resources
+    // release resources
+    if( MYTHREAD == 0 ) {
         for( int i = 0; i < NUM_LOCKS; i++ ) {
             upc_lock_free(locks[i]);
         }
-        // TODO free locks?
+        upc_free( locks_shared );
         upc_free( weight );
         upc_free( value );
         upc_free( total );
         upc_free( used );
     }
-
     return 0;
 }
